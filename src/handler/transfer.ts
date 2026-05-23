@@ -201,8 +201,10 @@ async function processLogQueue() {
     const chat = item.chat
 
     // Check if batch was cancelled
+    // batchProgress is deleted after cancel, so if this is a batch item
+    // and batchProgress is gone, it means the batch was cancelled
     const progressState = chatData[chat]?.batchProgress
-    if (progressState?.isCancelled) {
+    if (progressState?.isCancelled || (item.isBatch && !progressState)) {
       log(`[Log] Batch cancelled, removing item for chat ${chat}`)
       logQueue.shift()
       item.resolve()
@@ -1158,6 +1160,7 @@ export async function transferSingleURL(
           resolve: resolveLogPromise!,
           cleanupFilePath: filePath, // Log queue will clean up after sending
           cleanupDir: fileDir !== './cache' ? fileDir : undefined,
+          isBatch: true,
         })
         // Don't await logPromise — let log queue process in background
         // This allows transferSingleURL to return immediately for parallel processing
@@ -1193,15 +1196,6 @@ export async function transferSingleURL(
   } catch (e) {
     log(`[${logIndex}] Download from URL ${url} failed: ${e.stack || e.message}`)
 
-    // Log failed downloads to the log channel too
-    if (LOG_CHANNEL_ID) {
-      try {
-        await sendFailedToLogChannel(chat, logIndex, url, e.message || 'Unknown error')
-      } catch (logError) {
-        log(`[${logIndex}] Failed to send error log (non-fatal): ${logError.message}`)
-      }
-    }
-
     throw e
   } finally {
     // Only clean up on error — successful files are cleaned up by log queue
@@ -1213,31 +1207,4 @@ export async function transferSingleURL(
   }
 }
 
-// Send failed download info to log channel
-async function sendFailedToLogChannel(
-  chat: number,
-  index: number,
-  url: string,
-  error: string,
-) {
-  if (!LOG_CHANNEL_ID) return
-  try {
-    await waitForFloodGate()
-    await bot
-      .sendMessage(LOG_CHANNEL_ID, {
-        message: `❌ <b>Failed Upload</b>\nFrom: <code>${chat}</code>\nURL: <code>${url}</code>\nError: <code>${error}</code>\nIndex: ${index}`,
-        parseMode: 'html',
-      })
-      .catch((e) => {
-        const floodSec = getFloodWaitSeconds(e)
-        if (floodSec) setFloodPause(floodSec)
-      })
-    // Add delay to avoid flood
-    await new Promise(resolve => setTimeout(resolve, 2000))
-  } catch (e) {
-    const floodSec = getFloodWaitSeconds(e)
-    if (floodSec) setFloodPause(floodSec)
-    log(`Failed to send error log to channel: ${e.message}`)
-  }
-}
 

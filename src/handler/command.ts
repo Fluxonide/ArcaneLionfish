@@ -730,7 +730,7 @@ class GeneralCommands {
           // Delay between downloads within each worker to avoid
           // overwhelming the source server (Cloudflare Workers rate-limit aggressively)
           if (nextIndex < urls.length && !progressState.isCancelled) {
-            await sleep(2000)
+            await sleep(1000)
           }
         }
       }
