@@ -19,6 +19,12 @@ export async function handleCommand(msg: Api.Message) {
   const blocks = text.split(/(?=^\/)/m).map(b => b.trim()).filter(b => b.startsWith('/'))
 
   for (const block of blocks) {
+    // Check if commands were cancelled (e.g., user sent /cancel during a multi-command message)
+    if (chatData[chat]?.commandLoopCancelled) {
+      console.log(`[Command] Command loop cancelled for chat ${chat}, skipping remaining blocks`)
+      break
+    }
+
     const match = block.match(/^\/([^\s@]+)(?:@([^\s]+))?(?:\s+([\s\S]*))?$/)
     if (!match) continue
 
@@ -56,6 +62,11 @@ export async function handleCommand(msg: Api.Message) {
     if (blocks.length > 1 && block !== blocks[blocks.length - 1]) {
       await new Promise(r => setTimeout(r, 1500))
     }
+  }
+
+  // Reset the command loop cancel flag after all blocks are processed/skipped
+  if (chatData[chat]) {
+    chatData[chat].commandLoopCancelled = false
   }
 }
 
@@ -350,17 +361,22 @@ class GeneralCommands {
 
 
   async cancel() {
+    // Set the command loop cancel flag to stop processing further /send + /dl blocks
+    if (chatData[this.chat]) {
+      chatData[this.chat].commandLoopCancelled = true
+    }
+
     const progressState = chatData[this.chat].batchProgress
 
     if (!progressState || progressState.isComplete) {
       await bot.sendMessage(this.chat, {
-        message: '❌ No active batch download to cancel.',
+        message: '🛑 All pending commands cancelled.',
         parseMode: 'html',
       })
       return
     }
 
-    // Set the cancel flag
+    // Set the cancel flag on the active batch
     progressState.isCancelled = true
 
     // Abort any in-progress downloads/uploads immediately
@@ -370,11 +386,7 @@ class GeneralCommands {
 
     // Update the progress message to show cancellation
     const totalProcessed = progressState.completed + progressState.failed
-    const progress = Math.round((totalProcessed / progressState.totalUrls) * 100)
     const elapsed = (Date.now() - progressState.startTime) / 1000
-    const avgTimePerUrl = totalProcessed > 0 ? elapsed / totalProcessed : 0
-    const remaining = progressState.totalUrls - totalProcessed
-    const eta = totalProcessed > 0 ? Math.round(avgTimePerUrl * remaining) : 0
 
     function secToTime(sec: number) {
       if (!isFinite(sec) || sec < 0) return '00:00:00'
@@ -388,17 +400,15 @@ class GeneralCommands {
       ].join(':')
     }
 
-    function buildProgressBar(percent: number, length = 20): string {
-      const clamped = Math.max(0, Math.min(100, percent))
-      const filled = Math.round((clamped / 100) * length)
-      return '█'.repeat(filled) + '░'.repeat(length - filled)
+    let text = `<b>🛑 Batch Cancelled!</b>\n\n`
+    if (progressState.sourceUrl) {
+      text += `🔗 Source: <code>${progressState.sourceUrl}</code>\n`
     }
-
-    let text = `<b>🛑 Cancelling Batch...</b>\n\n`
-    text += `✅ ${progressState.completed} | ❌ ${progressState.failed} | 📊 ${totalProcessed}/${progressState.totalUrls}\n`
-    text += `<code>[${buildProgressBar(progress)}]</code> ${progress}%\n`
-    text += `⏱ ETA: <code>${secToTime(eta)}</code>\n\n`
-    text += `<i>Aborting in-progress downloads and stopping log uploads...</i>`
+    text += `📊 ${progressState.completed}/${progressState.totalUrls} successful`
+    if (progressState.failed > 0) text += ` | ❌ ${progressState.failed} failed`
+    text += ` | ⏭ ${progressState.totalUrls - totalProcessed} skipped`
+    text += `\n⏱ Elapsed: <code>${secToTime(Math.round(elapsed))}</code>`
+    text += `\n\n<i>All pending commands stopped.</i>`
 
     await bot
       .editMessage(this.chat, {
@@ -509,6 +519,7 @@ class GeneralCommands {
         isComplete: false,
         isCancelled: false,
         abortController,
+        sourceUrl: url,
         logStartTime: null as number | null,
         logLastDone: 0,
         logLastTime: null as number | null,
@@ -605,6 +616,13 @@ class GeneralCommands {
         statusMsgId: number,
       ): Promise<void> {
         while (nextIndex < urls.length && !progressState.isCancelled) {
+          // Backpressure: wait if log queue is too full to avoid filling disk with cached files
+          let logBackoff = getLogQueueStatus(chat)
+          while (logBackoff.pending > 10 && !progressState.isCancelled) {
+            await sleep(3000)
+            logBackoff = getLogQueueStatus(chat)
+          }
+
           const i = nextIndex++
           const currentUrl = urls[i]
 
@@ -651,10 +669,10 @@ class GeneralCommands {
             console.error(`[${i + 1}/${urls.length}] Error: ${error.message}`)
           }
 
-          // Small delay between downloads within each worker to avoid
-          // thundering herd on the source server
+          // Delay between downloads within each worker to avoid
+          // overwhelming the source server (Cloudflare Workers rate-limit aggressively)
           if (nextIndex < urls.length && !progressState.isCancelled) {
-            await sleep(250)
+            await sleep(2000)
           }
         }
       }
@@ -667,12 +685,74 @@ class GeneralCommands {
         // Stagger worker launches to avoid all workers hitting the
         // source server simultaneously at startup
         if (w < workerCount - 1) {
-          await sleep(250)
+          await sleep(1500)
         }
       }
 
       // Wait for all workers to complete
       await Promise.all(workers)
+
+      // ── Auto-Retry Failed Downloads ──────────────────────────────────────
+      const retryablePatterns = ['503', '429', '408', 'timeout', 'econnreset', 'fetch failed']
+      const retryableFailed = progressState.failedUrls.filter(f =>
+        !f.error.includes('Cancelled') &&
+        retryablePatterns.some(pat => f.error.toLowerCase().includes(pat))
+      )
+
+      let retryRecovered = 0
+      if (retryableFailed.length > 0 && !progressState.isCancelled) {
+        const retryAbortController = new AbortController()
+        progressState.abortController = retryAbortController
+
+        await bot.editMessage(this.chat, {
+          message: statusMsg.id,
+          text: `<b>🔄 Retrying ${retryableFailed.length} failed download(s)...</b>\n\n<i>Processing 1 at a time with longer delays to avoid server overload</i>`,
+          parseMode: 'html',
+        }).catch(() => {})
+
+        for (const failedItem of retryableFailed) {
+          if (progressState.isCancelled) break
+
+          // Longer delay between retries to let the server recover
+          await sleep(5000)
+
+          try {
+            const syntheticMsg = {
+              peerId: {
+                className: 'PeerUser',
+                userId: {
+                  toJSNumber: () => this.chat,
+                  toString: () => this.chat.toString(),
+                },
+              },
+              id: failedItem.index + 1,
+            } as any
+
+            const result = await transferSingleURL(
+              syntheticMsg,
+              failedItem.url,
+              failedItem.index + 1,
+              urls.length,
+              statusMsg.id,
+              retryAbortController.signal,
+            )
+
+            if (result) {
+              progressState.failedUrls = progressState.failedUrls.filter(f => f.index !== failedItem.index)
+              progressState.completed++
+              progressState.failed--
+              retryRecovered++
+            }
+          } catch (e) {
+            const existing = progressState.failedUrls.find(f => f.index === failedItem.index)
+            if (existing) {
+              existing.error = `Retry failed: ${e.message}`
+            }
+          }
+
+          await updateProgress().catch(() => {})
+        }
+      }
 
       // Wait for log queue to finish
       let logStatus = getLogQueueStatus(this.chat)
@@ -693,10 +773,17 @@ class GeneralCommands {
         ? `<b>🛑 Batch Cancelled!</b>\n\n`
         : `<b>✅ Batch Complete!</b>\n\n`
 
+      if (progressState.sourceUrl) {
+        finalText += `🔗 Source: <code>${progressState.sourceUrl}</code>\n`
+      }
       finalText += `📊 ${progressState.completed}/${urls.length} successful`
       if (progressState.failed > 0) finalText += ` | ❌ ${progressState.failed} failed`
       if (progressState.isCancelled) finalText += ` | ⏭ ${urls.length - totalProcessed} skipped`
       finalText += `\n⏱ Total time: <code>${secToTime(Math.round(totalElapsed))}</code>`
+
+      if (retryRecovered > 0) {
+        finalText += `\n🔄 Recovered ${retryRecovered} via auto-retry`
+      }
 
       if (progressState.failedUrls.length > 0) {
         const failedList = progressState.failedUrls
@@ -705,7 +792,7 @@ class GeneralCommands {
           .join('\n')
         finalText += `\n\n<b>❌ Failed:</b>\n${failedList}`
         if (progressState.failedUrls.length > 10) {
-          finalText += `\n... and ${failedUrls.length - 10} more`
+          finalText += `\n... and ${progressState.failedUrls.length - 10} more`
         }
       }
 

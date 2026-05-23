@@ -9,6 +9,10 @@ export interface BatchProgressState {
   isComplete: boolean
   isCancelled: boolean
   abortController?: AbortController
+  sourceUrl?: string
+  logStartTime: number | null
+  logLastDone: number
+  logLastTime: number | null
 }
 
 export interface UserData {
@@ -17,4 +21,5 @@ export interface UserData {
   total: number
   banned: boolean
   batchProgress?: BatchProgressState
+  commandLoopCancelled?: boolean
 }

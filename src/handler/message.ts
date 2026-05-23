@@ -326,6 +326,56 @@ async function handleURLMessage(msg: any) {
       }
     }
 
+    // ── Auto-Retry Failed Downloads ──────────────────────────────────────
+    const retryablePatterns = ['503', '429', '408', 'timeout', 'econnreset', 'fetch failed']
+    const retryableFailed = progressState.failedUrls.filter(f =>
+      !f.error.includes('Cancelled') &&
+      retryablePatterns.some(pat => f.error.toLowerCase().includes(pat))
+    )
+
+    let retryRecovered = 0
+    if (retryableFailed.length > 0 && !progressState.isCancelled) {
+      const retryAbortController = new AbortController()
+      progressState.abortController = retryAbortController
+
+      await bot.editMessage(chat, {
+        message: statusMsg.id,
+        text: `<b>🔄 Retrying ${retryableFailed.length} failed download(s)...</b>\n\n<i>Processing 1 at a time with longer delays</i>`,
+        parseMode: 'html',
+      }).catch(() => {})
+
+      for (const failedItem of retryableFailed) {
+        if (progressState.isCancelled) break
+
+        await new Promise(resolve => setTimeout(resolve, 5000))
+
+        try {
+          const result = await transferSingleURL(
+            msg,
+            failedItem.url,
+            failedItem.index + 1,
+            urls.length,
+            statusMsg.id,
+            retryAbortController.signal,
+          )
+
+          if (result) {
+            progressState.failedUrls = progressState.failedUrls.filter(f => f.index !== failedItem.index)
+            progressState.completed++
+            progressState.failed--
+            retryRecovered++
+          }
+        } catch (e) {
+          const existing = progressState.failedUrls.find(f => f.index === failedItem.index)
+          if (existing) {
+            existing.error = `Retry failed: ${e.message}`
+          }
+        }
+
+        await updateProgress().catch(() => {})
+      }
+    }
+
     // Wait for log queue to finish
     let logStatus = getLogQueueStatus(chat)
     while (!progressState.isCancelled && (logStatus.pending > 0 || logStatus.processing)) {
@@ -349,6 +399,10 @@ async function handleURLMessage(msg: any) {
     if (progressState.failed > 0) finalText += ` | ❌ ${progressState.failed} failed`
     if (progressState.isCancelled) finalText += ` | ⏭ ${urls.length - totalProcessed} skipped`
     finalText += `\n⏱ Total time: <code>${secToTime(Math.round(totalElapsed))}</code>`
+
+    if (retryRecovered > 0) {
+      finalText += `\n🔄 Recovered ${retryRecovered} via auto-retry`
+    }
 
     if (progressState.failedUrls.length > 0) {
       const failedList = progressState.failedUrls
