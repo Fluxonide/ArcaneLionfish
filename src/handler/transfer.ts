@@ -961,6 +961,16 @@ export async function transferSingleURL(
   // Wait if cache disk usage is too high
   await waitForCacheSpace()
 
+  // Abort-aware sleep: resolves immediately if the signal fires during the delay
+  const abortableSleep = (ms: number): Promise<void> => {
+    if (abortSignal?.aborted) return Promise.resolve()
+    return new Promise(resolve => {
+      const timer = setTimeout(resolve, ms)
+      const onAbort = () => { clearTimeout(timer); resolve() }
+      abortSignal?.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
   try {
     // Download file from URL with retry logic and exponential backoff
     let response!: Response
@@ -1020,7 +1030,8 @@ export async function transferSingleURL(
               `[${logIndex}] HTTP ${response.status} for ${url}, retry ${attempt}/${maxRetries} after ${delay}ms`,
             )
             if (attempt < maxRetries) {
-              await new Promise(resolve => setTimeout(resolve, delay))
+              await abortableSleep(delay)
+              if (abortSignal?.aborted) throw new Error('Cancelled')
               continue
             }
           } else if (response.status === 403) {
@@ -1030,7 +1041,8 @@ export async function transferSingleURL(
               `[${logIndex}] HTTP 403 Forbidden for ${url}, retry ${attempt}/${maxRetries} after ${delay}ms`,
             )
             if (attempt < maxRetries) {
-              await new Promise(resolve => setTimeout(resolve, delay))
+              await abortableSleep(delay)
+              if (abortSignal?.aborted) throw new Error('Cancelled')
               continue
             }
           }
@@ -1040,12 +1052,14 @@ export async function transferSingleURL(
         break // success
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e))
+        if (lastError.message === 'Cancelled') throw lastError
         if (attempt < maxRetries) {
           const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000)
           log(
             `[${logIndex}] Fetch error for ${url}: ${lastError.message}, retry ${attempt}/${maxRetries} after ${delay}ms`,
           )
-          await new Promise(resolve => setTimeout(resolve, delay))
+          await abortableSleep(delay)
+          if (abortSignal?.aborted) throw new Error('Cancelled')
         } else {
           throw lastError
         }
