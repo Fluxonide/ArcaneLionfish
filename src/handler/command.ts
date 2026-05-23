@@ -18,6 +18,27 @@ export async function handleCommand(msg: Api.Message) {
   // Split message by lines starting with /
   const blocks = text.split(/(?=^\/)/m).map(b => b.trim()).filter(b => b.startsWith('/'))
 
+  // Reset cancel flag at the start of each new message.
+  if (chatData[chat]) {
+    chatData[chat].commandLoopCancelled = false
+  }
+
+  // Detect multi-batch pattern: multiple /dl commands → single consolidated progress
+  const dlCount = blocks.filter(b => /^\/dl\s/.test(b)).length
+  if (dlCount > 1 && chatData[chat]) {
+    const masterMsg = await bot.sendMessage(chat, {
+      message: `<b>📥 Starting ${dlCount} batch downloads...</b>`,
+      parseMode: 'html',
+    })
+    chatData[chat].multiBatch = {
+      masterMsgId: masterMsg.id,
+      totalBatches: dlCount,
+      currentBatch: 0,
+      lastSendCaption: '',
+      completedBatches: [],
+    }
+  }
+
   for (const block of blocks) {
     // Check if commands were cancelled (e.g., user sent /cancel during a multi-command message)
     if (chatData[chat]?.commandLoopCancelled) {
@@ -62,11 +83,6 @@ export async function handleCommand(msg: Api.Message) {
     if (blocks.length > 1 && block !== blocks[blocks.length - 1]) {
       await new Promise(r => setTimeout(r, 1500))
     }
-  }
-
-  // Reset the command loop cancel flag after all blocks are processed/skipped
-  if (chatData[chat]) {
-    chatData[chat].commandLoopCancelled = false
   }
 }
 
@@ -289,7 +305,14 @@ class OwnerCommands {
           parseMode: 'html',
           linkPreview: false,
         })
-        await bot.sendMessage(this.chat, { message: 'Message sent to log channel.' })
+
+        const multiBatch = chatData[this.chat]?.multiBatch
+        if (multiBatch) {
+          // Store caption for the next /dl batch completion message
+          multiBatch.lastSendCaption = text
+        } else {
+          await bot.sendMessage(this.chat, { message: 'Message sent to log channel.' })
+        }
       }
     } catch (e: any) {
       if (e.errorMessage === 'FLOOD' || e.name === 'FloodWaitError') throw e;
@@ -418,6 +441,11 @@ class GeneralCommands {
         linkPreview: false,
       })
       .catch(() => {})
+
+    // Clean up multi-batch context
+    if (chatData[this.chat]?.multiBatch) {
+      delete chatData[this.chat].multiBatch
+    }
   }
 
   async dl(url: string) {
@@ -431,9 +459,32 @@ class GeneralCommands {
       return
     }
 
-    const statusMsg = await bot.sendMessage(this.chat, {
-      message: '📄 Downloading URL list from link...',
-    })
+    const multiBatch = chatData[this.chat]?.multiBatch
+    let statusMsgId: number
+    let batchCaption = ''
+
+    if (multiBatch) {
+      multiBatch.currentBatch++
+      batchCaption = multiBatch.lastSendCaption
+      statusMsgId = multiBatch.masterMsgId
+
+      // Strip #channel prefix for display
+      let displayCaption = batchCaption
+      if (displayCaption.startsWith('#')) {
+        displayCaption = displayCaption.replace(/^#\S+\s*/, '')
+      }
+
+      await bot.editMessage(this.chat, {
+        message: statusMsgId,
+        text: `<b>📥 Batch ${multiBatch.currentBatch}/${multiBatch.totalBatches}</b>\n${displayCaption}\n\n📄 Downloading URL list...`,
+        parseMode: 'html',
+      }).catch(() => {})
+    } else {
+      const statusMsg = await bot.sendMessage(this.chat, {
+        message: '📄 Downloading URL list from link...',
+      })
+      statusMsgId = statusMsg.id
+    }
 
     try {
       // Download the URL list
@@ -466,14 +517,14 @@ class GeneralCommands {
 
       if (urls.length === 0) {
         await bot.editMessage(this.chat, {
-          message: statusMsg.id,
+          message: statusMsgId,
           text: '❌ No URLs found in the file.',
         })
         return
       }
 
       await bot.editMessage(this.chat, {
-        message: statusMsg.id,
+        message: statusMsgId,
         text: `✅ Found ${urls.length} URLs.\n\nStarting parallel download (${PARALLEL_DOWNLOADS} concurrent)...`,
       })
 
@@ -514,7 +565,7 @@ class GeneralCommands {
         failedUrls,
         startTime,
         totalUrls: urls.length,
-        statusMsgId: statusMsg.id,
+        statusMsgId,
         chat: this.chat,
         isComplete: false,
         isCancelled: false,
@@ -537,8 +588,15 @@ class GeneralCommands {
         const remaining = progressState.totalUrls - totalProcessed
         const eta = totalProcessed > 0 ? Math.round(avgTimePerUrl * remaining) : 0
 
+        // Batch header for multi-batch mode
+        let text = ''
+        if (multiBatch) {
+          let displayCaption = batchCaption
+          if (displayCaption.startsWith('#')) displayCaption = displayCaption.replace(/^#\S+\s*/, '')
+          text += `<b>📥 Batch ${multiBatch.currentBatch}/${multiBatch.totalBatches}</b> — ${displayCaption}\n\n`
+        }
         // Download bar
-        let text = `<b>📥 Batch Download</b>\n`
+        text += `<b>📥 Downloading</b>\n`
         text += `✅ ${progressState.completed} | ❌ ${progressState.failed} | 📊 ${totalProcessed}/${progressState.totalUrls}\n`
         text += `<code>[${buildProgressBar(dlProgress)}]</code> ${dlProgress}%\n`
         text += `⏱ ETA: <code>${secToTime(eta)}</code>`
@@ -587,12 +645,12 @@ class GeneralCommands {
 
         await bot
           .editMessage(this.chat, {
-            message: statusMsg.id,
+            message: statusMsgId,
             text,
             parseMode: 'html',
             linkPreview: false,
             buttons:
-              showButton && !progressState.isComplete
+              showButton && !progressState.isComplete && !multiBatch
                 ? buttons.refreshProgress(this.chat)
                 : undefined,
           })
@@ -681,7 +739,7 @@ class GeneralCommands {
       const workers: Promise<void>[] = []
       const workerCount = Math.min(PARALLEL_DOWNLOADS, urls.length)
       for (let w = 0; w < workerCount; w++) {
-        workers.push(processWorker(this.chat, urls, progressState, statusMsg.id))
+        workers.push(processWorker(this.chat, urls, progressState, statusMsgId))
         // Stagger worker launches to avoid all workers hitting the
         // source server simultaneously at startup
         if (w < workerCount - 1) {
@@ -705,7 +763,7 @@ class GeneralCommands {
         progressState.abortController = retryAbortController
 
         await bot.editMessage(this.chat, {
-          message: statusMsg.id,
+          message: statusMsgId,
           text: `<b>🔄 Retrying ${retryableFailed.length} failed download(s)...</b>\n\n<i>Processing 1 at a time with longer delays to avoid server overload</i>`,
           parseMode: 'html',
         }).catch(() => {})
@@ -733,7 +791,7 @@ class GeneralCommands {
               failedItem.url,
               failedItem.index + 1,
               urls.length,
-              statusMsg.id,
+              statusMsgId,
               retryAbortController.signal,
             )
 
@@ -769,46 +827,130 @@ class GeneralCommands {
       const totalElapsed = (Date.now() - startTime) / 1000
       const totalProcessed = progressState.completed + progressState.failed
 
-      let finalText = progressState.isCancelled
-        ? `<b>🛑 Batch Cancelled!</b>\n\n`
-        : `<b>✅ Batch Complete!</b>\n\n`
+      if (multiBatch) {
+        // Multi-batch mode: post separate completion message, update master
+        let displayCaption = batchCaption
+        if (displayCaption.startsWith('#')) displayCaption = displayCaption.replace(/^#\S+\s*/, '')
 
-      if (progressState.sourceUrl) {
-        finalText += `🔗 Source: <code>${progressState.sourceUrl}</code>\n`
-      }
-      finalText += `📊 ${progressState.completed}/${urls.length} successful`
-      if (progressState.failed > 0) finalText += ` | ❌ ${progressState.failed} failed`
-      if (progressState.isCancelled) finalText += ` | ⏭ ${urls.length - totalProcessed} skipped`
-      finalText += `\n⏱ Total time: <code>${secToTime(Math.round(totalElapsed))}</code>`
+        let completeText = progressState.isCancelled
+          ? `<b>🛑 Batch Cancelled!</b>\n\n`
+          : `<b>✅ Batch Complete!</b>\n\n`
+        completeText += `${displayCaption}\n`
+        completeText += `<code>${url}</code>\n\n`
+        completeText += `📊 ${progressState.completed}/${urls.length} successful`
+        if (progressState.failed > 0) completeText += ` | ❌ ${progressState.failed} failed`
+        if (progressState.isCancelled) completeText += ` | ⏭ ${urls.length - totalProcessed} skipped`
+        completeText += `\n⏱ Total time: <code>${secToTime(Math.round(totalElapsed))}</code>`
+        if (retryRecovered > 0) completeText += `\n🔄 Recovered ${retryRecovered} via auto-retry`
 
-      if (retryRecovered > 0) {
-        finalText += `\n🔄 Recovered ${retryRecovered} via auto-retry`
-      }
-
-      if (progressState.failedUrls.length > 0) {
-        const failedList = progressState.failedUrls
-          .slice(0, 10)
-          .map(f => `${f.index + 1}. ${f.error}`)
-          .join('\n')
-        finalText += `\n\n<b>❌ Failed:</b>\n${failedList}`
-        if (progressState.failedUrls.length > 10) {
-          finalText += `\n... and ${progressState.failedUrls.length - 10} more`
+        if (progressState.failedUrls.length > 0) {
+          const failedList = progressState.failedUrls
+            .slice(0, 5)
+            .map(f => `${f.index + 1}. ${f.error}`)
+            .join('\n')
+          completeText += `\n\n<b>❌ Failed:</b>\n${failedList}`
+          if (progressState.failedUrls.length > 5) {
+            completeText += `\n... and ${progressState.failedUrls.length - 5} more`
+          }
         }
-      }
 
-      await bot.editMessage(this.chat, {
-        message: statusMsg.id,
-        text: finalText,
-        parseMode: 'html',
-        linkPreview: false,
-      })
+        await bot.sendMessage(this.chat, {
+          message: completeText,
+          parseMode: 'html',
+          linkPreview: false,
+        })
+
+        // Record in completed batches
+        multiBatch.completedBatches.push({
+          caption: displayCaption,
+          sourceUrl: url,
+          completed: progressState.completed,
+          total: urls.length,
+          failed: progressState.failed,
+          time: Math.round(totalElapsed),
+          retryRecovered,
+        })
+
+        // Update master message
+        if (multiBatch.currentBatch >= multiBatch.totalBatches || progressState.isCancelled) {
+          // All batches done (or cancelled) — show overall summary on master msg
+          let totalSuccess = 0, totalFail = 0, totalTime = 0
+          for (const b of multiBatch.completedBatches) {
+            totalSuccess += b.completed
+            totalFail += b.failed
+            totalTime += b.time
+          }
+          let masterText = progressState.isCancelled
+            ? `<b>🛑 All Batches Cancelled!</b>\n\n`
+            : `<b>✅ All ${multiBatch.totalBatches} Batches Complete!</b>\n\n`
+          masterText += `📊 ${totalSuccess} total successful`
+          if (totalFail > 0) masterText += ` | ❌ ${totalFail} total failed`
+          masterText += `\n⏱ Total time: <code>${secToTime(totalTime)}</code>`
+          await bot.editMessage(this.chat, {
+            message: statusMsgId,
+            text: masterText,
+            parseMode: 'html',
+            linkPreview: false,
+          }).catch(() => {})
+          delete chatData[this.chat].multiBatch
+        } else {
+          // More batches to come — show progress on master msg
+          let masterText = `<b>📥 Batch Downloads</b>\n\n`
+          masterText += `✅ ${multiBatch.completedBatches.length}/${multiBatch.totalBatches} batches complete\n`
+          for (const b of multiBatch.completedBatches) {
+            const tag = b.failed > 0 ? `${b.completed}/${b.total}` : `${b.total}/${b.total}`
+            masterText += `\n✓ ${b.caption.substring(0, 50)} — ${tag}`
+          }
+          await bot.editMessage(this.chat, {
+            message: statusMsgId,
+            text: masterText,
+            parseMode: 'html',
+            linkPreview: false,
+          }).catch(() => {})
+        }
+      } else {
+        // Single batch mode — edit the status message with final summary
+        let finalText = progressState.isCancelled
+          ? `<b>🛑 Batch Cancelled!</b>\n\n`
+          : `<b>✅ Batch Complete!</b>\n\n`
+
+        if (progressState.sourceUrl) {
+          finalText += `🔗 Source: <code>${progressState.sourceUrl}</code>\n`
+        }
+        finalText += `📊 ${progressState.completed}/${urls.length} successful`
+        if (progressState.failed > 0) finalText += ` | ❌ ${progressState.failed} failed`
+        if (progressState.isCancelled) finalText += ` | ⏭ ${urls.length - totalProcessed} skipped`
+        finalText += `\n⏱ Total time: <code>${secToTime(Math.round(totalElapsed))}</code>`
+
+        if (retryRecovered > 0) {
+          finalText += `\n🔄 Recovered ${retryRecovered} via auto-retry`
+        }
+
+        if (progressState.failedUrls.length > 0) {
+          const failedList = progressState.failedUrls
+            .slice(0, 10)
+            .map(f => `${f.index + 1}. ${f.error}`)
+            .join('\n')
+          finalText += `\n\n<b>❌ Failed:</b>\n${failedList}`
+          if (progressState.failedUrls.length > 10) {
+            finalText += `\n... and ${progressState.failedUrls.length - 10} more`
+          }
+        }
+
+        await bot.editMessage(this.chat, {
+          message: statusMsgId,
+          text: finalText,
+          parseMode: 'html',
+          linkPreview: false,
+        })
+      }
 
       // Clean up progress state
       delete chatData[this.chat].batchProgress
     } catch (error: any) {
       if (error.errorMessage === 'FLOOD' || error.name === 'FloodWaitError') throw error;
       await bot.editMessage(this.chat, {
-        message: statusMsg.id,
+        message: statusMsgId,
         text: `❌ Error downloading URL list: ${error.message}`,
       }).catch(() => {})
     }

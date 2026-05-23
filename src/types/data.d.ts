@@ -15,6 +15,22 @@ export interface BatchProgressState {
   logLastTime: number | null
 }
 
+export interface MultiBatchContext {
+  masterMsgId: number
+  totalBatches: number
+  currentBatch: number
+  lastSendCaption: string
+  completedBatches: Array<{
+    caption: string
+    sourceUrl: string
+    completed: number
+    total: number
+    failed: number
+    time: number
+    retryRecovered: number
+  }>
+}
+
 export interface UserData {
   lang: string
   downloading: number
@@ -22,4 +38,5 @@ export interface UserData {
   banned: boolean
   batchProgress?: BatchProgressState
   commandLoopCancelled?: boolean
+  multiBatch?: MultiBatchContext
 }
