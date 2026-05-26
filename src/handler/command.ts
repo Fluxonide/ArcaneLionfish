@@ -466,7 +466,6 @@ class GeneralCommands {
     if (multiBatch) {
       multiBatch.currentBatch++
       batchCaption = multiBatch.lastSendCaption
-      statusMsgId = multiBatch.masterMsgId
 
       // Strip #channel prefix for display
       let displayCaption = batchCaption
@@ -474,11 +473,12 @@ class GeneralCommands {
         displayCaption = displayCaption.replace(/^#\S+\s*/, '')
       }
 
-      await bot.editMessage(this.chat, {
-        message: statusMsgId,
-        text: `<b>📥 Batch ${multiBatch.currentBatch}/${multiBatch.totalBatches}</b>\n${displayCaption}\n\n📄 Downloading URL list...`,
+      // Always create a NEW progress message at the bottom for each batch
+      const statusMsg = await bot.sendMessage(this.chat, {
+        message: `<b>📥 Batch ${multiBatch.currentBatch}/${multiBatch.totalBatches}</b>\n${displayCaption}\n\n📄 Downloading URL list...`,
         parseMode: 'html',
-      }).catch(() => {})
+      })
+      statusMsgId = statusMsg.id
     } else {
       const statusMsg = await bot.sendMessage(this.chat, {
         message: '📄 Downloading URL list from link...',
@@ -513,7 +513,16 @@ class GeneralCommands {
 
       // Extract URLs from the content
       const urlRegex = /https?:\/\/[^\s]+/g
-      const urls = content.match(urlRegex) || []
+      const rawMatches = content.match(urlRegex) || []
+      // Filter out invalid URLs (pastebin artifacts, trailing garbage, etc.)
+      const urls = rawMatches.filter(u => {
+        try {
+          new URL(u)
+          return true
+        } catch {
+          return false
+        }
+      })
 
       if (urls.length === 0) {
         await bot.editMessage(this.chat, {
@@ -650,7 +659,7 @@ class GeneralCommands {
             parseMode: 'html',
             linkPreview: false,
             buttons:
-              showButton && !progressState.isComplete && !multiBatch
+              showButton && !progressState.isComplete
                 ? buttons.refreshProgress(this.chat)
                 : undefined,
           })
@@ -828,7 +837,7 @@ class GeneralCommands {
       const totalProcessed = progressState.completed + progressState.failed
 
       if (multiBatch) {
-        // Multi-batch mode: post separate completion message, update master
+        // Multi-batch mode: edit the batch's own progress message with completion summary
         let displayCaption = batchCaption
         if (displayCaption.startsWith('#')) displayCaption = displayCaption.replace(/^#\S+\s*/, '')
 
@@ -854,11 +863,13 @@ class GeneralCommands {
           }
         }
 
-        await bot.sendMessage(this.chat, {
-          message: completeText,
+        // Edit this batch's own progress message with completion summary
+        await bot.editMessage(this.chat, {
+          message: statusMsgId,
+          text: completeText,
           parseMode: 'html',
           linkPreview: false,
-        })
+        }).catch(() => {})
 
         // Record in completed batches
         multiBatch.completedBatches.push({
@@ -871,7 +882,7 @@ class GeneralCommands {
           retryRecovered,
         })
 
-        // Update master message
+        // Update master message with overall summary
         if (multiBatch.currentBatch >= multiBatch.totalBatches || progressState.isCancelled) {
           // All batches done (or cancelled) — show overall summary on master msg
           let totalSuccess = 0, totalFail = 0, totalTime = 0
@@ -887,7 +898,7 @@ class GeneralCommands {
           if (totalFail > 0) masterText += ` | ❌ ${totalFail} total failed`
           masterText += `\n⏱ Total time: <code>${secToTime(totalTime)}</code>`
           await bot.editMessage(this.chat, {
-            message: statusMsgId,
+            message: multiBatch.masterMsgId,
             text: masterText,
             parseMode: 'html',
             linkPreview: false,
@@ -902,7 +913,7 @@ class GeneralCommands {
             masterText += `\n✓ ${b.caption.substring(0, 50)} — ${tag}`
           }
           await bot.editMessage(this.chat, {
-            message: statusMsgId,
+            message: multiBatch.masterMsgId,
             text: masterText,
             parseMode: 'html',
             linkPreview: false,

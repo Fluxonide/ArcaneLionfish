@@ -93,7 +93,16 @@ async function handleTxtFileUrls(msg: any) {
 
     // Extract URLs from the file
     const urlRegex = /https?:\/\/[^\s]+/g
-    const urls = content.match(urlRegex) || []
+    const rawMatches = content.match(urlRegex) || []
+    // Filter out invalid URLs (pastebin artifacts, trailing garbage, etc.)
+    const urls = rawMatches.filter(u => {
+      try {
+        new URL(u)
+        return true
+      } catch {
+        return false
+      }
+    })
 
     if (urls.length === 0) {
       await bot.editMessage(chatId, {
@@ -145,7 +154,16 @@ async function handleURLMessage(msg: any) {
 
   // Extract all URLs from the message
   const urlRegex = /https?:\/\/[^\s]+/g
-  const urls = msg.message.match(urlRegex) || []
+  const rawMatches = msg.message.match(urlRegex) || []
+  // Filter out invalid URLs (pastebin artifacts, trailing garbage, etc.)
+  const urls = rawMatches.filter(u => {
+    try {
+      new URL(u)
+      return true
+    } catch {
+      return false
+    }
+  })
 
   if (urls.length === 0) return
 
