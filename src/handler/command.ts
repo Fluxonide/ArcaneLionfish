@@ -739,7 +739,7 @@ class GeneralCommands {
           // Delay between downloads within each worker to avoid
           // overwhelming the source server (Cloudflare Workers rate-limit aggressively)
           if (nextIndex < urls.length && !progressState.isCancelled) {
-            await sleep(1000)
+            await sleep(2000)
           }
         }
       }
@@ -752,7 +752,7 @@ class GeneralCommands {
         // Stagger worker launches to avoid all workers hitting the
         // source server simultaneously at startup
         if (w < workerCount - 1) {
-          await sleep(1500)
+          await sleep(2500)
         }
       }
 

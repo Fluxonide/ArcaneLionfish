@@ -566,7 +566,24 @@ async function processLogQueue() {
   log(`[Log] Global Queue processor stopped`)
 }
 
+// ─── Per-Host Concurrency Lock ──────────────────────────────────────────────
+// Prevents multiple parallel workers from hitting the same image host
+// simultaneously, which triggers 503 rate-limits on hosts like Cloudflare.
+const hostLocks = new Map<string, Promise<void>>()
 
+async function acquireHostLock(url: string): Promise<() => void> {
+  const host = new URL(url).host
+  while (hostLocks.has(host)) {
+    await hostLocks.get(host)
+  }
+  let release!: () => void
+  const lock = new Promise<void>(resolve => { release = resolve })
+  hostLocks.set(host, lock)
+  return () => {
+    hostLocks.delete(host)
+    release()
+  }
+}
 
 // Check if cache directory usage exceeds the limit
 function getCacheSizeMB(): number {
@@ -974,7 +991,7 @@ export async function transferSingleURL(
   try {
     // Download file from URL with retry logic and exponential backoff
     let response!: Response
-    const maxRetries = 5
+    const maxRetries = 7
     let lastError: Error | null = null
 
     // Ensure bot is connected before starting
@@ -982,6 +999,10 @@ export async function transferSingleURL(
       log(`[${logIndex}] Bot disconnected, reconnecting...`)
       await bot.connect()
     }
+
+    // Acquire per-host lock to prevent concurrent requests to the same server
+    const releaseHostLock = await acquireHostLock(url)
+    try {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -991,7 +1012,7 @@ export async function transferSingleURL(
         }
 
         const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), 30000) // 30s timeout per request
+        const timeout = setTimeout(() => controller.abort(), 120000) // 120s timeout — large files (17MB+) need time
 
         // If the parent abort signal fires, abort this fetch too
         const onAbort = () => controller.abort()
@@ -1024,8 +1045,17 @@ export async function transferSingleURL(
 
         if (!response.ok) {
           if (response.status === 503 || response.status === 429 || response.status === 408) {
-            // Rate limited, service unavailable, or timeout — retry with exponential backoff
-            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000) // 2s, 4s, 8s, 15s
+            // Rate limited, service unavailable, or timeout — retry with longer backoff
+            // Respect Retry-After header if present (some hosts specify how long to wait)
+            const retryAfterHeader = response.headers.get('retry-after')
+            let delay: number
+            if (retryAfterHeader) {
+              const retryAfterSec = parseInt(retryAfterHeader)
+              delay = isNaN(retryAfterSec) ? 10000 : retryAfterSec * 1000
+              delay = Math.min(delay, 120000) // cap at 2 minutes
+            } else {
+              delay = Math.min(3000 * Math.pow(2, attempt - 1), 60000) // 3s, 6s, 12s, 24s, 48s, 60s
+            }
             log(
               `[${logIndex}] HTTP ${response.status} for ${url}, retry ${attempt}/${maxRetries} after ${delay}ms`,
             )
@@ -1036,7 +1066,7 @@ export async function transferSingleURL(
             }
           } else if (response.status === 403) {
             // Forbidden - retry with exponential backoff (might be rate limiting)
-            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000)
+            const delay = Math.min(3000 * Math.pow(2, attempt - 1), 60000)
             log(
               `[${logIndex}] HTTP 403 Forbidden for ${url}, retry ${attempt}/${maxRetries} after ${delay}ms`,
             )
@@ -1054,7 +1084,7 @@ export async function transferSingleURL(
         lastError = e instanceof Error ? e : new Error(String(e))
         if (lastError.message === 'Cancelled') throw lastError
         if (attempt < maxRetries) {
-          const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000)
+          const delay = Math.min(3000 * Math.pow(2, attempt - 1), 60000)
           log(
             `[${logIndex}] Fetch error for ${url}: ${lastError.message}, retry ${attempt}/${maxRetries} after ${delay}ms`,
           )
@@ -1064,6 +1094,11 @@ export async function transferSingleURL(
           throw lastError
         }
       }
+    }
+
+    } finally {
+      // Release host lock once we have the response (or failed all retries)
+      releaseHostLock()
     }
 
     // Get file size from Content-Length header
