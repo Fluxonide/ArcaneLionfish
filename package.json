@@ -1,7 +1,7 @@
 {
-  "name": "tg_log_uploader",
+  "name": "arcane-lionfish",
   "version": "3.0.0",
-  "description": "A Telegram bot to upload files to a log channel",
+  "description": "ArcaneLionfish - a Telegram bot that uploads files to a log channel",
   "main": "index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -14,14 +14,11 @@
     "bot",
     "uploader"
   ],
-  "author": "AnotiaWang",
-  "license": "MIT",
   "type": "module",
   "dependencies": {
     "big-integer": "^1.6.52",
     "dotenv": "^16.0.0",
     "mime-types": "^2.1.34",
-    "pnpm": "^10.32.1",
     "sharp": "^0.34.5",
     "shelljs": "^0.10.0",
     "telegram": "^2.9.8",

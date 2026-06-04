@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tg-catbox-uploader
+    name: arcane-lionfish
     env: node
     region: oregon
     plan: free
@@ -21,8 +21,6 @@ services:
         sync: false
       - key: ADMIN_ID
         sync: false
-      - key: CATBOX_TOKEN
-        sync: false
       - key: LOG_CHANNEL_ID
         sync: false
       - key: MAX_DOWNLOADING
@@ -34,6 +32,6 @@ services:
       - key: PARALLEL_DOWNLOADS
         value: '5'
       - key: BOT_NAME
-        value: 'Catbox Uploader'
+        value: 'ArcaneLionfish'
     autoDeploy: true
     healthCheckPath: /health
