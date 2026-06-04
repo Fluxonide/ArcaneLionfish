@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { LogLevel } from 'telegram/extensions/Logger.js'
 import { CallbackQuery } from 'telegram/events/CallbackQuery.js'
 import { NewMessage } from 'telegram/events/index.js'
-import { loadBotData, log, cleanupOrphanTransferTasks } from './src/handler/data.js'
+import { loadBotData, log, cleanupOrphanTransferTasks, saveBotDataNow } from './src/handler/data.js'
 import { API_ID, API_HASH, BOT_TOKEN } from './src/env.js'
 import { handleCallbackQuery } from './src/handler/callbackQuery.js'
 import { handleMessage } from './src/handler/message.js'
@@ -78,3 +78,12 @@ process
   .on('uncaughtException', error => {
     console.error(error, 'Uncaught Exception thrown')
   })
+
+// Ensure the debounced chat data is flushed to disk before the process exits.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    log(`Received ${signal}, saving data and exiting...`)
+    saveBotDataNow()
+    process.exit(0)
+  })
+}
