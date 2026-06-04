@@ -301,7 +301,7 @@ class OwnerCommands {
       } else {
         // If not a URL, send as text message (original behavior)
         await bot.sendMessage(LOG_CHANNEL_ID, {
-          message: `<b><i><u>${text}</u></i></b>`,
+          message: text,
           parseMode: 'html',
           linkPreview: false,
         })
@@ -320,6 +320,7 @@ class OwnerCommands {
     }
   }
 
+  async s(text: string) { return this.send(text) }
 
 }
 
@@ -966,6 +967,8 @@ class GeneralCommands {
       }).catch(() => {})
     }
   }
+
+  async d(url: string) { return this.dl(url) }
 }
 
 function sleep(ms: number) {
