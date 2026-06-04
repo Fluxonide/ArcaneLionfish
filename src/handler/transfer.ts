@@ -9,6 +9,11 @@ sharp.cache(false)
 import { chatData, log } from './data.js'
 import { bot } from '../../index.js'
 import {
+  LOG_CHANNEL_SEND_DELAY_MS,
+  FLOOD_SAFETY_BUFFER_MS,
+  FLOOD_DEFAULT_SECONDS,
+} from '../constants.js'
+import {
   MAX_DOWNLOADING,
   ADMIN_ID,
   LOG_CHANNEL_ID,
@@ -40,10 +45,10 @@ export function getFloodWaitSeconds(e: any): number | null {
       // Try to extract seconds from message like "Sleeping for 30s on flood wait"
       const match = e.message.match(/(\d+)s?\s*(?:on\s+)?flood/i) ||
         e.message.match(/flood.*?(\d+)/i)
-      return match ? parseInt(match[1]) : 30 // default 30s if we can't parse
+      return match ? parseInt(match[1]) : FLOOD_DEFAULT_SECONDS
     }
   }
-  if (e.errorMessage === 'FLOOD') return e.seconds || 30
+  if (e.errorMessage === 'FLOOD') return e.seconds || FLOOD_DEFAULT_SECONDS
   return null
 }
 
@@ -51,7 +56,7 @@ export function getFloodWaitSeconds(e: any): number | null {
  * Set a global flood pause. ALL API calls will wait until this expires.
  */
 export function setFloodPause(seconds: number) {
-  const pauseUntil = Date.now() + (seconds * 1000) + 2000 // extra 2s safety buffer
+  const pauseUntil = Date.now() + (seconds * 1000) + FLOOD_SAFETY_BUFFER_MS
   if (pauseUntil > floodPauseUntil) {
     floodPauseUntil = pauseUntil
     log(`[FloodGate] ⚠️ Flood detected! Pausing ALL API calls for ${seconds + 2}s`)
@@ -528,8 +533,7 @@ async function processLogQueue() {
       log(`[Log] Successfully sent to log channel: ${item.url}`)
 
       // Delay between log items (flood gate handles emergencies, this spacing prevents Telegram limits)
-      // We wait 4500ms to stay well under the ~20 messages/minute group send limit
-      await new Promise(resolve => setTimeout(resolve, 4500))
+      await new Promise(resolve => setTimeout(resolve, LOG_CHANNEL_SEND_DELAY_MS))
     } catch (e) {
       log(`Failed to send to log channel: ${e.message || e}`)
       const floodSec = getFloodWaitSeconds(e)

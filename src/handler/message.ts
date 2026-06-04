@@ -2,8 +2,13 @@ import i18n from '../i18n/index.js'
 import { bot } from '../../index.js'
 import { handleCommand } from './command.js'
 import { chatData, initChatData } from './data.js'
-import { transfer, transferFromURL } from './transfer.js'
+import { transfer } from './transfer.js'
 import { ALLOWED_USERS, ADMIN_ID } from '../env.js'
+import { secToTime, buildProgressBar } from './progress.js'
+import {
+  PROGRESS_REFRESH_INTERVAL_MS,
+  RETRY_DELAY_MS,
+} from '../constants.js'
 import type { NewMessageEvent } from 'telegram/events/NewMessage.js'
 
 // Message handler
@@ -122,14 +127,13 @@ async function handleTxtFileUrls(msg: any) {
       bot.deleteMessages(chatId, [statusMsg.id], { revoke: true }).catch(() => null)
     }, 2000)
 
-    // Create a synthetic message with the URLs
+    // Reuse the real URL batch handler with the extracted links.
     const syntheticMsg = {
       ...msg,
       message: urls.join('\n'),
     }
 
-    // Process the URLs
-    await transferFromURL(syntheticMsg)
+    await handleURLMessage(syntheticMsg)
   } catch (error: any) {
     if (error.errorMessage === 'FLOOD' || error.name === 'FloodWaitError') throw error;
     await bot.editMessage(chatId, {
@@ -180,25 +184,6 @@ async function handleURLMessage(msg: any) {
     let failed = 0
     const failedUrls: Array<{ index: number; url: string; error: string }> = []
     const startTime = Date.now()
-
-    // Helper functions
-    function secToTime(sec: number) {
-      if (!isFinite(sec) || sec < 0) return '00:00:00'
-      const hour = Math.floor(sec / 3600)
-      const min = Math.floor((sec - hour * 3600) / 60)
-      const secs = sec - hour * 3600 - min * 60
-      return [
-        hour.toString().padStart(2, '0'),
-        min.toString().padStart(2, '0'),
-        secs.toString().padStart(2, '0'),
-      ].join(':')
-    }
-
-    function buildProgressBar(percent: number, length = 20): string {
-      const clamped = Math.max(0, Math.min(100, percent))
-      const filled = Math.round((clamped / 100) * length)
-      return '█'.repeat(filled) + '░'.repeat(length - filled)
-    }
 
     // Create AbortController for cancellation
     const abortController = new AbortController()
@@ -299,7 +284,7 @@ async function handleURLMessage(msg: any) {
       if (!progressState.isComplete && !isFloodPaused()) {
         updateProgress().catch(() => {})
       }
-    }, 7000)
+    }, PROGRESS_REFRESH_INTERVAL_MS)
 
     // Process URLs one by one sequentially
     for (let i = 0; i < urls.length; i++) {
@@ -365,7 +350,7 @@ async function handleURLMessage(msg: any) {
       for (const failedItem of retryableFailed) {
         if (progressState.isCancelled) break
 
-        await new Promise(resolve => setTimeout(resolve, 5000))
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
 
         try {
           const result = await transferSingleURL(
