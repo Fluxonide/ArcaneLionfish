@@ -20,6 +20,9 @@ export const chatDataTemplate = {
   banned: false,
 }
 
+// Timestamp captured when the process started, used to detect orphan cache items.
+const PROCESS_START_TIME = Date.now()
+
 // console.log, with date added
 export function log(...text: any[]) {
   console.log(`[${new Date().toISOString()}] [Bot] - ${text.join(' ')}`)
@@ -31,8 +34,10 @@ export function initChatData(userId: string | number | bigint) {
     chatData[_userId] = Object.assign({}, chatDataTemplate)
     console.log(`User ${_userId} data initialized`)
   } else {
+    // Only fill in genuinely missing keys. Using `=== undefined` avoids
+    // wrongly resetting valid falsy values like downloading: 0 or banned: false.
     for (let key in chatDataTemplate) {
-      if (!chatData[_userId][key]) {
+      if (chatData[_userId][key] === undefined) {
         chatData[_userId][key] = chatDataTemplate[key]
       }
     }
@@ -40,8 +45,30 @@ export function initChatData(userId: string | number | bigint) {
   saveBotData()
 }
 
+// Debounced save: initChatData() runs on every incoming message, so writing the
+// whole JSON file each time is wasteful. Batch writes into a short window while
+// still guaranteeing a flush via saveBotDataNow() (e.g. on shutdown).
+let saveTimer: NodeJS.Timeout | null = null
+const SAVE_DEBOUNCE_MS = 3000
+
 export function saveBotData() {
-  writeFileSync('./data/chatsList.json', JSON.stringify(chatData))
+  if (saveTimer) return
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    saveBotDataNow()
+  }, SAVE_DEBOUNCE_MS)
+}
+
+export function saveBotDataNow() {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  try {
+    writeFileSync('./data/chatsList.json', JSON.stringify(chatData))
+  } catch (e) {
+    log(`Failed to save bot data: ${e.message}`)
+  }
 }
 
 export function loadBotData() {
@@ -65,19 +92,19 @@ export function cleanupOrphanTransferTasks() {
   }
 
   // Find cache files and directories that were created before the bot was launched,
-  // and delete them
+  // and delete them. Comparing against the process start time (not `now`) ensures
+  // we never remove files belonging to transfers started by this running instance.
   let deletedCount = 0
 
   if (existsSync('./cache')) {
     try {
-      const now = new Date()
       const cacheItems = readdirSync('./cache', 'utf-8')
 
       cacheItems.forEach(item => {
         const itemPath = `./cache/${item}`
         try {
           const stat = statSync(itemPath)
-          if (stat.birthtime < now) {
+          if (stat.birthtimeMs < PROCESS_START_TIME) {
             if (stat.isFile()) {
               rmSync(itemPath)
               deletedCount++
