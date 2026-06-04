@@ -1,6 +1,6 @@
 {
   "name": "简体中文",
-  "help": "🐱 <b>欢迎使用 Uploader！</b>\n\n本机器人可以将您发送的文件上传到日志频道。\n\n命令列表：\n/help - 显示帮助信息\n/settings - 设置语言\n/dl - 从文本文件链接下载并处理 URL\n/cancel - 取消正在进行的批量下载\n\n网络资源分享频道： @atashare",
+  "help": "🐱 <b>欢迎使用 ArcaneLionfish！</b>\n\n本机器人可以将您发送的文件上传到日志频道。\n\n命令列表：\n/help - 显示帮助信息\n/settings - 设置语言\n/dl - 从文本文件链接下载并处理 URL\n/cancel - 取消正在进行的批量下载\n\n网络资源分享频道： @atashare",
   "downloading": "正在下载文件...",
   "downloadProgress": "<b>📥 下载中</b>\n\n<b>文件大小：</b>{1} MB\n<b>已下载：</b>{2} MB\n<b>速度：</b>{3} MB/s\n<b>剩余时间：</b><code>{4}</code>",
   "uploading": "文件下载成功，正在上传至日志频道...",
@@ -13,7 +13,7 @@
   "settings": "⚙ 设置",
   "help_settings": "单击下方的按钮查看相关描述及选项。",
   "settings_setLang": "🌏 语言",
-  "help_setLang": "若想贡献新的翻译，请前往 <a href='https://github.com/AnotiaWang/TG_Catbox_Uploader'>GitHub</a> 查看指引。",
+  "help_setLang": "欢迎贡献翻译：在 src/i18n 目录下参照现有语言文件新建即可。",
   "settings_back": "🔙 返回",
   "saveDataSuccess": "成功保存数据。",
   "operationFailed": "操作失败：{1}",

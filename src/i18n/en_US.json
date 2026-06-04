@@ -1,6 +1,6 @@
 {
   "name": "English",
-  "help": "🐱 <b>Welcome to Uploader!</b>\n\nThis bot can upload your files to the log channel.\n\nCommands:\n/help - Send this help info\n/settings - Choose a language.\n/dl - Download and process URLs from a text file link.\n/cancel - Cancel an active batch download.\n\nTake a look at my channel @atashare and @atabots for interesting websites and update notes!",
+  "help": "🐱 <b>Welcome to ArcaneLionfish!</b>\n\nThis bot can upload your files to the log channel.\n\nCommands:\n/help - Send this help info\n/settings - Choose a language.\n/dl - Download and process URLs from a text file link.\n/cancel - Cancel an active batch download.\n\nTake a look at my channel @atashare and @atabots for interesting websites and update notes!",
   "downloading": "Downloading...",
   "downloadProgress": "<b>📥 Downloading</b>\n\n<b>Total size: </b>{1} MB\n<b>Downloaded: </b>{2} MB\n<b>Speed: </b>{3} MB/s\n<b>ETA: </b><code>{4}</code>",
   "uploading": "File downloaded successfully. Now uploading to log channel...",
@@ -13,7 +13,7 @@
   "settings": "<b>⚙ Settings</b>",
   "help_settings": "Tap the buttons below to see description and corresponding options.",
   "settings_setLang": "🌏 Language",
-  "help_setLang": "To contribute translations, please check the guides on <a href='https://github.com/AnotiaWang/TG_Catbox_Uploader'>GitHub</a>.",
+  "help_setLang": "Translations are welcome. Add a new file under src/i18n following the existing language files.",
   "settings_back": "🔙 Back",
   "saveDataSuccess": "Data saved.",
   "operationFailed": "Operation failed: {1}",
