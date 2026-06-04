@@ -24,7 +24,7 @@ export async function handleCommand(msg: Api.Message) {
   }
 
   // Detect multi-batch pattern: multiple /dl commands → single consolidated progress
-  const dlCount = blocks.filter(b => /^\/dl\s/.test(b)).length
+  const dlCount = blocks.filter(b => /^\/(dl|d)\s/.test(b)).length
   if (dlCount > 1 && chatData[chat]) {
     const masterMsg = await bot.sendMessage(chat, {
       message: `<b>📥 Starting ${dlCount} batch downloads...</b>`,
