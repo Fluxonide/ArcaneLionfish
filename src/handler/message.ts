@@ -9,6 +9,7 @@ import {
   PROGRESS_REFRESH_INTERVAL_MS,
   RETRY_DELAY_MS,
 } from '../constants.js'
+import { enqueueMessage, isImmediateMessage } from './queue.js'
 import type { NewMessageEvent } from 'telegram/events/NewMessage.js'
 
 // Message handler
@@ -37,22 +38,33 @@ export async function handleMessage(event: NewMessageEvent) {
       return
     }
   }
-  if (isCommand(msg.message)) await handleCommand(msg)
-  else if (hasURLs(msg.message)) await handleURLMessage(msg)
-  else if (msg.media) {
-    // Check if it's a .txt file with URLs
-    if (await isTxtFileWithUrls(msg)) {
-      await handleTxtFileUrls(msg)
-    } else {
-      await transfer(msg)
-    }
-  } else {
-    bot
-      .sendMessage(chatId, {
-        message: i18n.t(lang, 'sendMeAFile'),
-      })
-      .catch(() => null)
+  // Immediate commands (e.g. /cancel) bypass the queue and execute right away
+  if (isCommand(msg.message) && isImmediateMessage(msg.message)) {
+    await handleCommand(msg)
+    return
   }
+
+  // Everything else goes through the per-user queue so messages are processed
+  // one at a time in order.
+  const label = msg.message?.substring(0, 60) || '(media)'
+  await enqueueMessage(userId, async () => {
+    if (isCommand(msg.message)) await handleCommand(msg)
+    else if (hasURLs(msg.message)) await handleURLMessage(msg)
+    else if (msg.media) {
+      // Check if it's a .txt file with URLs
+      if (await isTxtFileWithUrls(msg)) {
+        await handleTxtFileUrls(msg)
+      } else {
+        await transfer(msg)
+      }
+    } else {
+      bot
+        .sendMessage(chatId, {
+          message: i18n.t(lang, 'sendMeAFile'),
+        })
+        .catch(() => null)
+    }
+  }, label)
 }
 
 // Check if message contains a .txt file

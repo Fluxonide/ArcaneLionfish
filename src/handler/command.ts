@@ -6,6 +6,7 @@ import { ADMIN_ID, LOG_CHANNEL_ID, PARALLEL_DOWNLOADS } from '../env.js'
 import type { Api } from 'telegram'
 import * as fs from 'fs'
 import mime from 'mime-types'
+import { clearQueue } from './queue.js'
 
 // Format title while excluding hashtags
 function formatCaptionText(caption: string): string {
@@ -424,11 +425,15 @@ class GeneralCommands {
       chatData[this.chat].commandLoopCancelled = true
     }
 
+    // Clear any queued messages waiting to be processed
+    const queuedRemoved = clearQueue(this.chat)
+
     const progressState = chatData[this.chat].batchProgress
 
     if (!progressState || progressState.isComplete) {
+      const queueMsg = queuedRemoved > 0 ? `\n📋 Removed ${queuedRemoved} queued message(s).` : ''
       await bot.sendMessage(this.chat, {
-        message: '🛑 All pending commands cancelled.',
+        message: `🛑 All pending commands cancelled.${queueMsg}`,
         parseMode: 'html',
       })
       return
@@ -466,6 +471,7 @@ class GeneralCommands {
     if (progressState.failed > 0) text += ` | ❌ ${progressState.failed} failed`
     text += ` | ⏭ ${progressState.totalUrls - totalProcessed} skipped`
     text += `\n⏱ Elapsed: <code>${secToTime(Math.round(elapsed))}</code>`
+    if (queuedRemoved > 0) text += `\n📋 Removed ${queuedRemoved} queued message(s).`
     text += `\n\n<i>All pending commands stopped.</i>`
 
     await bot
