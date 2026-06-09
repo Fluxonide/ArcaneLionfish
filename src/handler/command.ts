@@ -7,6 +7,40 @@ import type { Api } from 'telegram'
 import * as fs from 'fs'
 import mime from 'mime-types'
 
+// Format title while excluding hashtags
+function formatCaptionText(caption: string): string {
+  if (!caption) return '';
+  const lines = caption.split('\n');
+  let titleFormatted = false;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!titleFormatted && line.trim().length > 0) {
+      const tokens = line.split(/(#\w+)/);
+      let formattedLine = '';
+      let hasText = false;
+      for (const t of tokens) {
+        if (t.startsWith('#')) {
+          formattedLine += t;
+        } else {
+          const trimmed = t.trim();
+          if (trimmed) {
+            formattedLine += t.replace(trimmed, `<b><u>${trimmed}</u></b>`);
+            hasText = true;
+          } else {
+            formattedLine += t;
+          }
+        }
+      }
+      lines[i] = formattedLine;
+      if (hasText) {
+        titleFormatted = true;
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
 // Bot command handler
 export async function handleCommand(msg: Api.Message) {
   const text = msg.message
@@ -268,7 +302,7 @@ class OwnerCommands {
           })
 
           // Upload to log channel with caption
-          const captionText = caption ? `<b><i><u>${caption}</u></i></b>` : ''
+          const captionText = caption ? formatCaptionText(caption) : ''
 
           await bot.sendFile(LOG_CHANNEL_ID, {
             file: filePath,
@@ -301,7 +335,7 @@ class OwnerCommands {
       } else {
         // If not a URL, send as text message (original behavior)
         await bot.sendMessage(LOG_CHANNEL_ID, {
-          message: text,
+          message: formatCaptionText(text),
           parseMode: 'html',
           linkPreview: false,
         })
