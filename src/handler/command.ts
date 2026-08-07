@@ -357,7 +357,133 @@ class OwnerCommands {
 
   async s(text: string) { return this.send(text) }
 
+  async del(arg: string) {
+    if (!LOG_CHANNEL_ID) {
+      return bot
+        .sendMessage(this.chat, { message: 'LOG_CHANNEL_ID is not configured.' })
+        .catch(console.error)
+    }
+
+    if (!arg) {
+      return bot
+        .sendMessage(this.chat, {
+          message:
+            '❌ Usage: /del &lt;start_link&gt; &lt;end_link&gt;\n\n' +
+            'Example:\n/del https://t.me/c/3638429252/1641 https://t.me/c/3638429252/1643\n\n' +
+            'This will delete messages 1641 to 1643 (inclusive) from the log channel.',
+          parseMode: 'html',
+        })
+        .catch(console.error)
+    }
+
+    // Parse the two Telegram message links
+    // Format: https://t.me/c/<channel_id>/<message_id>
+    const linkRegex = /https?:\/\/t\.me\/c\/(\d+)\/(\d+)/g
+    const matches = [...arg.matchAll(linkRegex)]
+
+    if (matches.length < 2) {
+      return bot
+        .sendMessage(this.chat, {
+          message:
+            '❌ Please provide exactly two message links.\n\n' +
+            'Usage: /del &lt;start_link&gt; &lt;end_link&gt;\n' +
+            'Example: /del https://t.me/c/3638429252/1641 https://t.me/c/3638429252/1643',
+          parseMode: 'html',
+        })
+        .catch(console.error)
+    }
+
+    const startMsgId = parseInt(matches[0][2])
+    const endMsgId = parseInt(matches[1][2])
+
+    if (isNaN(startMsgId) || isNaN(endMsgId)) {
+      return bot
+        .sendMessage(this.chat, { message: '❌ Failed to parse message IDs from the links.' })
+        .catch(console.error)
+    }
+
+    // Ensure start <= end
+    const fromId = Math.min(startMsgId, endMsgId)
+    const toId = Math.max(startMsgId, endMsgId)
+    const totalMessages = toId - fromId + 1
+
+    const statusMsg = await bot.sendMessage(this.chat, {
+      message: `🗑 Deleting ${totalMessages} messages (ID ${fromId} to ${toId}) from log channel...`,
+      parseMode: 'html',
+    })
+
+    try {
+      // Build the list of message IDs
+      const messageIds: number[] = []
+      for (let id = fromId; id <= toId; id++) {
+        messageIds.push(id)
+      }
+
+      let deleted = 0
+      let errors = 0
+
+      // Telegram allows deleting up to 100 messages at a time
+      const BATCH_SIZE = 100
+      for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+        const batch = messageIds.slice(i, i + BATCH_SIZE)
+
+        try {
+          await bot.deleteMessages(LOG_CHANNEL_ID, batch, { revoke: true })
+          deleted += batch.length
+        } catch (e: any) {
+          if (e.errorMessage === 'FLOOD' || e.name === 'FloodWaitError') {
+            const waitSeconds = e.seconds || 30
+            await bot.editMessage(this.chat, {
+              message: statusMsg.id,
+              text: `⏳ Flood wait: pausing ${waitSeconds}s... (${deleted}/${totalMessages} deleted so far)`,
+            }).catch(() => {})
+            await sleep(waitSeconds * 1000 + 2000)
+            // Retry this batch
+            try {
+              await bot.deleteMessages(LOG_CHANNEL_ID, batch, { revoke: true })
+              deleted += batch.length
+            } catch (retryErr: any) {
+              console.error(`[Del] Retry failed for batch starting at ${batch[0]}:`, retryErr.message)
+              errors += batch.length
+            }
+          } else {
+            console.error(`[Del] Error deleting batch starting at ${batch[0]}:`, e.message)
+            errors += batch.length
+          }
+        }
+
+        // Update progress every batch
+        if (i + BATCH_SIZE < messageIds.length) {
+          await bot.editMessage(this.chat, {
+            message: statusMsg.id,
+            text: `🗑 Deleting... ${deleted}/${totalMessages} done${errors > 0 ? ` | ❌ ${errors} errors` : ''}`,
+          }).catch(() => {})
+          // Small delay between batches to avoid flooding
+          await sleep(1500)
+        }
+      }
+
+      // Final summary
+      let finalText = `✅ Deletion complete!\n\n`
+      finalText += `📊 ${deleted} messages deleted (ID ${fromId} → ${toId})`
+      if (errors > 0) finalText += `\n❌ ${errors} messages failed to delete`
+
+      await bot.editMessage(this.chat, {
+        message: statusMsg.id,
+        text: finalText,
+        parseMode: 'html',
+      })
+    } catch (e: any) {
+      if (e.errorMessage === 'FLOOD' || e.name === 'FloodWaitError') throw e
+      await bot.editMessage(this.chat, {
+        message: statusMsg.id,
+        text: `❌ Failed to delete messages: ${e.message}`,
+      }).catch(() => {})
+    }
+  }
+
 }
+
 
 class GeneralCommands {
   chat: number
@@ -654,7 +780,8 @@ class GeneralCommands {
         // Log upload bar (always shown as a separate section)
         const logStatus = getLogQueueStatus(this.chat)
         const totalLogs = progressState.totalUrls
-        const logsDone = Math.max(0, totalLogs - logStatus.pending)
+        const logsDone = Math.max(0, progressState.completed - logStatus.pending)
+        const logsRemaining = totalLogs - logsDone
         const logProgress = totalLogs > 0 ? Math.round((logsDone / totalLogs) * 100) : 0
 
         // Track log start time once logs begin processing
@@ -669,17 +796,17 @@ class GeneralCommands {
         if (progressState.logLastTime !== null && logsDone > progressState.logLastDone) {
           const logElapsed = (Date.now() - progressState.logLastTime) / 1000
           const logRate = (logsDone - progressState.logLastDone) / logElapsed // logs/sec
-          logEta = logRate > 0 ? Math.round(logStatus.pending / logRate) : 0
+          logEta = logRate > 0 ? Math.round(logsRemaining / logRate) : 0
           progressState.logLastDone = logsDone
           progressState.logLastTime = Date.now()
         } else if (progressState.logStartTime !== null) {
           const logElapsed = (Date.now() - progressState.logStartTime) / 1000
           const logRate = logsDone > 0 ? logsDone / logElapsed : 0
-          logEta = logRate > 0 ? Math.round(logStatus.pending / logRate) : 0
+          logEta = logRate > 0 ? Math.round(logsRemaining / logRate) : 0
         }
 
         text += `\n\n<b>📤 Uploading Logs</b>\n`
-        text += `✅ ${logsDone} | ⏳ ${logStatus.pending} remaining\n`
+        text += `✅ ${logsDone} | ⏳ ${logsRemaining} remaining\n`
         text += `<code>[${buildProgressBar(logProgress)}]</code> ${logProgress}%\n`
         text += `⏱ ETA: <code>${secToTime(logEta)}</code>`
 
