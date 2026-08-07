@@ -8,6 +8,7 @@ import { loadBotData, log, cleanupOrphanTransferTasks, saveBotDataNow } from './
 import { API_ID, API_HASH, BOT_TOKEN } from './src/env.js'
 import { handleCallbackQuery } from './src/handler/callbackQuery.js'
 import { handleMessage } from './src/handler/message.js'
+import { registerBotCommands } from './src/handler/command.js'
 
 const stringSession = new StringSession(
   existsSync('./data/.session') ? readFileSync('./data/.session', 'utf-8') : '',
@@ -33,6 +34,8 @@ await bot.connect()
 cleanupOrphanTransferTasks()
 
 export const BOT_NAME = ((await bot.getMe()) as Api.User).username!
+
+await registerBotCommands()
 
 writeFileSync('./data/.session', bot.session.save() as unknown as string)
 log('Launched successfully.')

@@ -1,9 +1,9 @@
 import i18n from '../i18n/index.js'
 import * as buttons from './buttons.js'
 import { bot, BOT_NAME } from '../../index.js'
-import { chatData, saveBotData } from './data.js'
-import { ADMIN_ID, LOG_CHANNEL_ID, PARALLEL_DOWNLOADS } from '../env.js'
-import type { Api } from 'telegram'
+import { chatData, saveBotData, log } from './data.js'
+import { ADMIN_ID, BOT_TOKEN, LOG_CHANNEL_ID, PARALLEL_DOWNLOADS } from '../env.js'
+import { Api } from 'telegram'
 import * as fs from 'fs'
 import mime from 'mime-types'
 import { clearQueue } from './queue.js'
@@ -1140,4 +1140,90 @@ class GeneralCommands {
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms))
+}
+
+export async function registerBotCommands() {
+  const defaultCommands = [
+    { command: 'start', description: 'Start the bot' },
+    { command: 'help', description: 'Show help message' },
+    { command: 'settings', description: 'Change settings & language' },
+    { command: 'stats', description: 'View statistics' },
+    { command: 'cancel', description: 'Cancel active download or queue' },
+    { command: 'dl', description: 'Download batch from post URL' },
+    { command: 'send', description: 'Send media with custom caption' },
+    { command: 'del', description: 'Delete post logs from channel' },
+  ]
+
+  const zhCommands = [
+    { command: 'start', description: '启动机器人与选择语言' },
+    { command: 'help', description: '查看帮助信息' },
+    { command: 'settings', description: '更改设置与语言' },
+    { command: 'stats', description: '查看机器人与传输统计' },
+    { command: 'cancel', description: '取消当前下载或队列' },
+    { command: 'dl', description: '从 URL 批量下载媒体' },
+    { command: 'send', description: '自定义标题发送文件' },
+    { command: 'del', description: '从频道删除帖子日志' },
+  ]
+
+  const adminCommands = [
+    ...defaultCommands,
+    { command: 'broadcast', description: 'Broadcast message to all users' },
+    { command: 'ban', description: 'Ban a user by ID' },
+    { command: 'unban', description: 'Unban a user by ID' },
+  ]
+
+  try {
+    // 1. Set default global commands
+    await bot.invoke(
+      new Api.bots.SetBotCommands({
+        scope: new Api.BotCommandScopeDefault(),
+        langCode: '',
+        commands: defaultCommands.map(c => new Api.BotCommand(c)),
+      }),
+    )
+
+    // 2. Set Chinese language commands
+    await bot.invoke(
+      new Api.bots.SetBotCommands({
+        scope: new Api.BotCommandScopeDefault(),
+        langCode: 'zh',
+        commands: zhCommands.map(c => new Api.BotCommand(c)),
+      }),
+    )
+
+    // 3. Set Admin specific commands if ADMIN_ID is set
+    if (ADMIN_ID) {
+      try {
+        const adminPeer = await bot.getInputEntity(ADMIN_ID)
+        await bot.invoke(
+          new Api.bots.SetBotCommands({
+            scope: new Api.BotCommandScopePeer({ peer: adminPeer }),
+            langCode: '',
+            commands: adminCommands.map(c => new Api.BotCommand(c)),
+          }),
+        )
+      } catch (adminErr) {
+        log('[Commands] Could not set admin specific commands:', adminErr)
+      }
+    }
+
+    log('[Commands] Telegram bot commands automatically registered successfully.')
+  } catch (err) {
+    log('[Commands] Failed to set bot commands via MTProto, trying Bot API HTTP endpoint...', err)
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setMyCommands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commands: defaultCommands }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        log('[Commands] Telegram bot commands registered via HTTP Bot API.')
+      } else {
+        log('[Commands] HTTP Bot API setMyCommands failed:', data)
+      }
+    } catch (httpErr) {
+      log('[Commands] Failed to set bot commands via HTTP API:', httpErr)
+    }
+  }
 }
