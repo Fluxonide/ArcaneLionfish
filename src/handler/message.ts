@@ -238,7 +238,8 @@ async function handleURLMessage(msg: any) {
       // Log upload bar (always shown as a separate section)
       const logStatus = getLogQueueStatus(chat)
       const totalLogs = progressState.totalUrls
-      const logsDone = Math.max(0, totalLogs - logStatus.pending)
+      const logsDone = Math.max(0, progressState.completed - logStatus.pending)
+      const logsRemaining = totalLogs - logsDone
       const logProgress = totalLogs > 0 ? Math.round((logsDone / totalLogs) * 100) : 0
 
       // Track log start time once logs begin processing
@@ -253,17 +254,17 @@ async function handleURLMessage(msg: any) {
       if (progressState.logLastTime !== null && logsDone > progressState.logLastDone) {
         const logElapsed = (Date.now() - progressState.logLastTime) / 1000
         const logRate = (logsDone - progressState.logLastDone) / logElapsed // logs/sec
-        logEta = logRate > 0 ? Math.round(logStatus.pending / logRate) : 0
+        logEta = logRate > 0 ? Math.round(logsRemaining / logRate) : 0
         progressState.logLastDone = logsDone
         progressState.logLastTime = Date.now()
       } else if (progressState.logStartTime !== null) {
         const logElapsed = (Date.now() - progressState.logStartTime) / 1000
         const logRate = logsDone > 0 ? logsDone / logElapsed : 0
-        logEta = logRate > 0 ? Math.round(logStatus.pending / logRate) : 0
+        logEta = logRate > 0 ? Math.round(logsRemaining / logRate) : 0
       }
 
       text += `\n\n<b>📤 Uploading Logs</b>\n`
-      text += `✅ ${logsDone} | ⏳ ${logStatus.pending} remaining\n`
+      text += `✅ ${logsDone} | ⏳ ${logsRemaining} remaining\n`
       text += `<code>[${buildProgressBar(logProgress)}]</code> ${logProgress}%\n`
       text += `⏱ ETA: <code>${secToTime(logEta)}</code>`
 
